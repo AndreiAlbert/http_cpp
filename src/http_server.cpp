@@ -1,4 +1,6 @@
 #include "../include/http_server.hpp"
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <sys/socket.h>
@@ -6,10 +8,16 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sstream>
+#include <unordered_map>
+#include "../include/utils.hpp"
 
+#define BUFFER_SIZE 1024
 using std::istringstream;
+using utils::FileReadStatus;
+using utils::read_file;
+using utils::get_mime_type;
 
-HttpServer::HttpServer(int port) : port_(port), server_fd_(-1) {}
+HttpServer::HttpServer(int port, const fs::path& root_dir) : port_(port), server_fd_(-1), root_dir(root_dir) {}
 
 bool HttpServer::start() {
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -47,24 +55,85 @@ bool HttpServer::start() {
     }
 }
 
-
 void HttpServer::handle_request(int client_fd) {
-    const int buffer_size = 2048;
-    char buffer[buffer_size];
-    ssize_t bytes_received = recv(client_fd, buffer, buffer_size - 1, 0); 
-    if(bytes_received < 0) {
-        std::cerr << "Failed to receive data." << std::endl;
-        return;
+    std::string request_data;  
+    ssize_t bytes_received;
+    size_t content_length = 0;
+    bool headers_complete = false;
+    while (true) {
+        char buffer[BUFFER_SIZE];
+        bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0);
+        if (bytes_received < 0) {
+            std::cerr << "Error receiving data." << std::endl;
+            return;
+        } else if (bytes_received == 0) {
+            break;
+        }
+        request_data.append(buffer, bytes_received);
+        if (!headers_complete) {
+            size_t pos = request_data.find("\r\n\r\n");
+            if (pos != std::string::npos) {
+                headers_complete = true;
+                std::istringstream header_stream(request_data.substr(0, pos + 4));
+                std::string line;
+                while (std::getline(header_stream, line) && line != "\r") {
+                    if (line.back() == '\r') line.pop_back(); 
+                    if (line.find("Content-Length:") == 0) {
+                        content_length = std::stoi(line.substr(15));
+                    }
+                }
+                if (content_length == 0) {
+                    break;
+                }
+            }
+        }
+        if (headers_complete && content_length > 0) {
+            size_t header_end_pos = request_data.find("\r\n\r\n") + 4;
+            size_t body_length = request_data.size() - header_end_pos;
+            if (body_length >= content_length) {
+                break;
+            }
+        }
     }
+    HttpRequest request = parse_request(request_data);
+    auto full_path = this->map_request_to_file(request.url);
+    string file_content;
+    FileReadStatus status = read_file(full_path, file_content);
+    auto content_type = get_mime_type(full_path);
+    switch (status) {
+        case FileReadStatus::FileNotFound:
+            send_response(client_fd, 404, "404 Not Found", content_type);
+        break;
+        case FileReadStatus::PermissionDenied:
+            send_response(client_fd, 403, "403 Forbidden", content_type);
+        break;
+        case FileReadStatus::ReadError:
+            send_response(client_fd, 500, "500 Server Error", content_type);
+        break;
+        case FileReadStatus::Success:
+            send_response(client_fd, 200, file_content, content_type);
+        break;
+    }
+}
 
-    parse_request(buffer);
-    buffer[bytes_received] = '\0';
-    std::string response = 
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain\r\n"
-        "Content-Length: 13\r\n"
-        "\r\n"
-        "Hello, World!";
+void HttpServer::send_response(int client_fd, int status_code, const string& content, const string& content_type) {
+    std::unordered_map<int, string> status_map = {
+        {200, "OK"}, {404, "Not Found"}, {403, "Forbidden"}, {500, "Internal Server Error"}
+    };
+    string status_text;
+    if (status_map.find(status_code) != status_map.end()) {
+        status_text = status_map[status_code];
+    } else {
+        status_text = "Unkown status";
+    }
+    std::ostringstream response_stream;
+    response_stream << "HTTP/1.1 " << status_code << " " << status_text << "\r\n"
+                    << "Content-Type: " << content_type << "\r\n"
+                    << "Content-Length: " << content.size() << "\r\n"
+                    << "Connection: closer\r\n"
+                    << "\r\n"
+                    << content;
+    string response = response_stream.str();
     send(client_fd, response.c_str(), response.size(), 0);
 }
 
@@ -74,30 +143,15 @@ HttpServer::~HttpServer() {
     }
 }
 
-void debug_http_req(HttpRequest r) {
-    std::cout << "LOGGING\n";
-    std::cout << "Method: " << r.method << std::endl;
-    std::cout << "Path: " << r.path << std::endl;
-    std::cout << "http_version: " << r.http_version << std::endl;
-    std::cout << "body: " << r.body << std::endl;
-    std::cout << "Headers: \n";
-    for(const auto& it: r.headers) {
-        std::cout << it.first << " " << it.second << "\n";
-    }
-}
-
-
-
-HttpRequest parse_request(const std::string &request_text) {
+HttpRequest HttpServer::parse_request(const std::string &request_text) {
     HttpRequest request;
     istringstream request_stream(request_text);
     std::string request_line;
 
     if(std::getline(request_stream, request_line)) {
         std::istringstream line_stream(request_line);
-        line_stream >> request.method >> request.path >> request.http_version;
+        line_stream >> request.method >> request.url >> request.http_version;
     }
-    
     std::string header_line;
     while(std::getline(request_stream, header_line) && header_line != "\r") {
         if(header_line.back() == '\r') {
@@ -114,13 +168,22 @@ HttpRequest parse_request(const std::string &request_text) {
             request.headers[header_name] = header_value;
         }
     }
-
     auto content_length_it = request.headers.find("Content-Length");
     if(content_length_it != request.headers.end()) {
         size_t content_length = std::stoi(content_length_it->second);
         request.body.resize(content_length);
         request_stream.read(&request.body[0], content_length);
     }
-    debug_http_req(request);
     return request;
+}
+
+fs::path HttpServer::map_request_to_file(const std::string& request_url) {
+    if(request_url == "/")  {
+        return this->root_dir / "index.html";
+    }
+    std::string clean_path;
+    if(!request_url.empty() && request_url[0] == '/') {
+        clean_path = request_url.substr(1);
+    }
+    return this->root_dir / clean_path;
 }
