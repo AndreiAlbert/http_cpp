@@ -12,10 +12,12 @@
 #include "../include/utils.hpp"
 
 #define BUFFER_SIZE 1024
+
 using std::istringstream;
 using utils::FileReadStatus;
 using utils::read_file;
 using utils::get_mime_type;
+using utils::generate_directory_page;
 
 HttpServer::HttpServer(int port, const fs::path& root_dir) : port_(port), server_fd_(-1), root_dir(root_dir) {}
 
@@ -54,6 +56,7 @@ bool HttpServer::start() {
         close(client_fd);
     }
 }
+
 
 void HttpServer::handle_request(int client_fd) {
     std::string request_data;  
@@ -97,6 +100,11 @@ void HttpServer::handle_request(int client_fd) {
     }
     HttpRequest request = parse_request(request_data);
     auto full_path = this->map_request_to_file(request.url);
+    if (fs::exists(full_path) && fs::is_directory(full_path)) {
+        auto html_body =  generate_directory_page(full_path, request.url);
+        send_response(client_fd, 200, html_body, "text/html");
+        return;
+    }
     string file_content;
     FileReadStatus status = read_file(full_path, file_content);
     auto content_type = get_mime_type(full_path);

@@ -3,11 +3,11 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
 namespace utils {
-
     std::string get_mime_type(const std::string& file_name) {
         size_t pos = file_name.find_last_of('.');
         std::string extension = (pos != std::string::npos) ? file_name.substr(pos + 1) : "";
@@ -54,5 +54,22 @@ namespace utils {
         file_content = file_stream.str();
         return FileReadStatus::Success;
     }
+    std::string generate_directory_page(const fs::path& dir_path, const std::string& req_url) {
+        std::ostringstream html;
+        html << "<!DOCTYPE html><html><head><title> Index of " << req_url << "</title></head><body>";
+        html << "<h1> Index of " << req_url << "</h1><ul>";
 
-} // namespace utils
+        for(const auto& entry: fs::directory_iterator(dir_path)) {
+            std::string name = entry.path().filename().string();
+            std::string link = req_url + (req_url.back() == '/' ? "" : "/") + name;
+            if(entry.is_directory()) {
+                html << "<li> <a href=\"" << link << "/\">" << name << "/</a></li>";
+            } else {
+                html << "<li><a href=\"" << link << "\">" << name << "</a></li>";
+            }
+        }
+        html << "</ul><body></html>";
+        return html.str();
+}
+
+}
