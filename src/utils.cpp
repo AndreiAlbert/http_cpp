@@ -1,8 +1,10 @@
 #include "../include/utils.hpp"
+#include <cstdlib>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace fs = std::filesystem;
@@ -70,6 +72,19 @@ namespace utils {
         }
         html << "</ul><body></html>";
         return html.str();
-}
-
+    }
+    std::string expand_tilde(const std::string& path) {
+        if (path.empty()) {
+            return path; 
+        }
+        if (path[0] == '~') {
+            const char* home = std::getenv("HOME");
+            if(home) {
+                return std::string(home) + path.substr(1);
+            } else {
+                throw std::runtime_error("HOME environment variable is not set");
+            }
+        }
+        return path;
+    }
 }

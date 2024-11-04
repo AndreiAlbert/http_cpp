@@ -1,12 +1,12 @@
 #include "../include/http_server.hpp"
 #include "../include/config.hpp"
+#include "../include/utils.hpp"
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 
-
-int main(int argc, char* argv[]) {
+int main() {
     Options options;
     try {
         options = load_config("./config.ini");
@@ -14,7 +14,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error loading configuration file: " << e.what() << std::endl;
         exit(1);
     }
-    HttpServer server(options.port, options.root);
+    auto path = utils::expand_tilde(options.root);
+    HttpServer server(options.port, path);
     if(!server.start()) {
         std::cerr << "Could not start server" << std::endl;
         exit(1);

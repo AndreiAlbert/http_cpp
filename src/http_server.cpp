@@ -1,4 +1,6 @@
 #include "../include/http_server.hpp"
+#include "../include/logger.hpp"
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -18,6 +20,8 @@ using utils::FileReadStatus;
 using utils::read_file;
 using utils::get_mime_type;
 using utils::generate_directory_page;
+
+Logger logger("server.log");
 
 HttpServer::HttpServer(int port, const fs::path& root_dir) : port_(port), server_fd_(-1), root_dir(root_dir) {}
 
@@ -59,6 +63,7 @@ bool HttpServer::start() {
 
 
 void HttpServer::handle_request(int client_fd) {
+    logger.log(Logger::LogLevel::INFO, "Handling new request");
     std::string request_data;  
     ssize_t bytes_received;
     size_t content_length = 0;
@@ -67,6 +72,7 @@ void HttpServer::handle_request(int client_fd) {
         char buffer[BUFFER_SIZE];
         bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0);
         if (bytes_received < 0) {
+            logger.log(Logger::LogLevel::ERROR, "Error receiving data from client");
             std::cerr << "Error receiving data." << std::endl;
             return;
         } else if (bytes_received == 0) {
@@ -99,8 +105,10 @@ void HttpServer::handle_request(int client_fd) {
         }
     }
     HttpRequest request = parse_request(request_data);
+    logger.log(Logger::LogLevel::INFO, "Parsed request URL: " + request.url);
     auto full_path = this->map_request_to_file(request.url);
     if (fs::exists(full_path) && fs::is_directory(full_path)) {
+        logger.log(Logger::LogLevel::INFO, "Request is for a directory: " + full_path.string());
         auto html_body =  generate_directory_page(full_path, request.url);
         send_response(client_fd, 200, html_body, "text/html");
         return;
@@ -108,17 +116,22 @@ void HttpServer::handle_request(int client_fd) {
     string file_content;
     FileReadStatus status = read_file(full_path, file_content);
     auto content_type = get_mime_type(full_path);
+    logger.log(Logger::LogLevel::INFO, "Request is for a file: " + full_path.string());
     switch (status) {
         case FileReadStatus::FileNotFound:
+            logger.log(Logger::LogLevel::ERROR, "File not Found: " + full_path.string());
             send_response(client_fd, 404, "404 Not Found", content_type);
         break;
         case FileReadStatus::PermissionDenied:
+            logger.log(Logger::LogLevel::ERROR, "Permission denied: " + full_path.string());
             send_response(client_fd, 403, "403 Forbidden", content_type);
         break;
         case FileReadStatus::ReadError:
+            logger.log(Logger::LogLevel::ERROR, "Error reading file: " + full_path.string());
             send_response(client_fd, 500, "500 Server Error", content_type);
         break;
         case FileReadStatus::Success:
+            logger.log(Logger::LogLevel::ERROR, "Successfulyl read file: " + full_path.string());
             send_response(client_fd, 200, file_content, content_type);
         break;
     }
@@ -187,7 +200,7 @@ HttpRequest HttpServer::parse_request(const std::string &request_text) {
 
 fs::path HttpServer::map_request_to_file(const std::string& request_url) {
     if(request_url == "/")  {
-        return this->root_dir / "index.html";
+        return this->root_dir;
     }
     std::string clean_path;
     if(!request_url.empty() && request_url[0] == '/') {
