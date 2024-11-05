@@ -21,8 +21,8 @@ A lightweight HTTP server implemented in C++17, inspired by Apache, with support
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/your-repository-name.git
-cd your-repository-name
+git clone https://github.com/AndreiAlbert/http_cpp.git
+cd http_cpp
 ```
 ### 2. Configuration
 
